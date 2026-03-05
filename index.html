@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VR Hand Gesture Locomotion Template</title>
+    <!-- Import A-Frame (v1.5.0 provides excellent WebXR Hand Tracking support) -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+
+    <script>
+        /**
+         * 1. GESTURE LOCOMOTION COMPONENT
+         * This is the core logic for your hand-tracking movement. 
+         * You can easily port this component into other environments.
+         */
+        AFRAME.registerComponent('gesture-locomotion', {
+            schema: {
+                speed: { type: 'number', default: 2.0 }, // Movement speed in meters per second
+                camera: { type: 'selector', default: '#camera' },
+                leftHand: { type: 'selector', default: '#leftHand' },
+                rightHand: { type: 'selector', default: '#rightHand' }
+            },
+
+            init: function () {
+                // Tracking state variables
+                this.isRightPinching = false;
+                this.isLeftPinching = false;
+                
+                // Vector to calculate where the camera is looking
+                this.cameraDirection = new THREE.Vector3();
+                
+                // UI reference for visual feedback
+                this.statusText = document.querySelector('#status-text');
+
+                // Attach Event Listeners to the Hand Entities
+                // WebXR 'hand-tracking-controls' automatically fires 'pinchstarted' and 'pinchended'
+                if (this.data.rightHand) {
+                    this.data.rightHand.addEventListener('pinchstarted', () => { this.isRightPinching = true; });
+                    this.data.rightHand.addEventListener('pinchended', () => { this.isRightPinching = false; });
+                }
+                if (this.data.leftHand) {
+                    this.data.leftHand.addEventListener('pinchstarted', () => { this.isLeftPinching = true; });
+                    this.data.leftHand.addEventListener('pinchended', () => { this.isLeftPinching = false; });
+                }
+            },
+
+            tick: function (time, timeDelta) {
+                if (!this.data.camera) return;
+
+                // --- UI Update Logic ---
+                if (this.statusText) {
+                    if (this.isRightPinching && !this.isLeftPinching) {
+                        this.statusText.setAttribute('value', 'Moving Forward >>\n(Right Pinch)');
+                        this.statusText.setAttribute('color', '#00FF00');
+                    } else if (this.isLeftPinching && !this.isRightPinching) {
+                        this.statusText.setAttribute('value', '<< Moving Backward\n(Left Pinch)');
+                        this.statusText.setAttribute('color', '#FF4444');
+                    } else if (this.isRightPinching && this.isLeftPinching) {
+                        this.statusText.setAttribute('value', 'Blocked\n(Release one hand)');
+                        this.statusText.setAttribute('color', '#FFA500');
+                    } else {
+                        this.statusText.setAttribute('value', 'Status: Idle\nPinch Right -> Forward\nPinch Left -> Backward');
+                        this.statusText.setAttribute('color', '#FFFFFF');
+                    }
+                }
+
+                // --- Movement Logic ---
+                // If both hands are pinching, or neither are pinching, do not move.
+                if (this.isRightPinching === this.isLeftPinching) return;
+
+                // Calculate movement distance based on speed and time passed
+                const distance = (this.data.speed * timeDelta) / 1000;
+
+                // Get the direction the camera is currently looking
+                this.data.camera.object3D.getWorldDirection(this.cameraDirection);
+                
+                // Flatten the vector so you don't fly up into the sky or dig into the ground
+                this.cameraDirection.y = 0; 
+                this.cameraDirection.normalize();
+
+                // Apply the movement to the Rig
+                // Note: 'getWorldDirection' points out of the camera (-Z), so we subtract for forward, add for backward
+                if (this.isRightPinching) {
+                    this.el.object3D.position.addScaledVector(this.cameraDirection, -distance);
+                } else if (this.isLeftPinching) {
+                    this.el.object3D.position.addScaledVector(this.cameraDirection, distance);
+                }
+            }
+        });
+
+        /**
+         * 2. ENVIRONMENT GENERATOR COMPONENT
+         * Generates a plain world with scattered reference objects (pillars).
+         * This makes it easy to perceive speed and direction when moving.
+         */
+        AFRAME.registerComponent('environment-generator', {
+            init: function () {
+                const floor = document.createElement('a-plane');
+                floor.setAttribute('rotation', '-90 0 0');
+                floor.setAttribute('width', '100');
+                floor.setAttribute('height', '100');
+                floor.setAttribute('color', '#222222');
+                this.el.appendChild(floor);
+
+                for (let i = 0; i < 60; i++) {
+                    const pillar = document.createElement('a-box');
+                    // Random coordinates from -40 to 40
+                    const x = (Math.random() - 0.5) * 80;
+                    const z = (Math.random() - 0.5) * 80;
+
+                    // Ensure the middle spawn area (0,0) is kept clear
+                    if (Math.abs(x) < 4 && Math.abs(z) < 4) continue;
+
+                    const height = Math.random() * 4 + 1;
+                    pillar.setAttribute('position', { x: x, y: height / 2, z: z });
+                    pillar.setAttribute('height', height);
+                    pillar.setAttribute('width', 0.5);
+                    pillar.setAttribute('depth', 0.5);
+                    pillar.setAttribute('color', '#' + Math.floor(Math.random() * 16777215).toString(16));
+                    
+                    this.el.appendChild(pillar);
+                }
+            }
+        });
+    </script>
+</head>
+<body>
+    <!-- Require webxr features for native hand-tracking capabilities -->
+    <a-scene webxr="optionalFeatures: hand-tracking">
+        
+        <!-- Generated Environment with random pillars to see movement -->
+        <a-entity environment-generator></a-entity>
+
+        <!-- Player Rig - Attach the Locomotion Component to the Rig -->
+        <a-entity id="rig" gesture-locomotion position="0 0 0">
+            
+            <!-- Player Camera -->
+            <a-camera id="camera" position="0 1.6 0">
+                <!-- Floating HUD attached to camera for status updates -->
+                <a-text 
+                    id="status-text" 
+                    value="Status: Idle" 
+                    position="0 -0.5 -1.5" 
+                    align="center" 
+                    width="2" 
+                    color="#FFFFFF"
+                    font="mozillavr"
+                ></a-text>
+            </a-camera>
+
+            <!-- 
+                WebXR Hand Tracking Controls 
+                These automatically handle providing the 3D hand models and emitting
+                'pinchstarted' and 'pinchended' events when fingers touch. 
+            -->
+            <a-entity id="leftHand" hand-tracking-controls="hand: left;"></a-entity>
+            <a-entity id="rightHand" hand-tracking-controls="hand: right;"></a-entity>
+            
+        </a-entity>
+
+    </a-scene>
+</body>
+</html>
