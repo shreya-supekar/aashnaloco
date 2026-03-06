@@ -9,143 +9,125 @@
 
     <script>
         /**
-         * 1. SWISH LOCOMOTION COMPONENT
-         * Tracks the velocity of both hands. When both hands move together in a direction
-         * faster than a set threshold, it moves the player in the opposite direction.
+         * 1. GRAB AND PULL LOCOMOTION COMPONENT
+         * This component allows the user to 'grab' the air by pinching and 
+         * then move their hand to pull themselves through the world.
          */
-        AFRAME.registerComponent('swish-locomotion', {
+        AFRAME.registerComponent('grab-locomotion', {
             schema: {
-                multiplier: { type: 'number', default: 2.5 }, // How much the rig moves relative to your hand movement
-                threshold: { type: 'number', default: 0.005 }, // Minimum movement per frame (filters out slow hand resets)
+                multiplier: { type: 'number', default: 2.0 }, // Sensitivity of the pull
                 leftHand: { type: 'selector', default: '#leftHand' },
                 rightHand: { type: 'selector', default: '#rightHand' }
             },
 
             init: function () {
-                // Store previous frame positions to calculate velocity/delta
-                this.prevLeft = new THREE.Vector3();
-                this.prevRight = new THREE.Vector3();
-                this.hasInitializedPositions = false;
+                this.isLeftGrabbing = false;
+                this.isRightGrabbing = false;
                 
-                // UI reference for visual feedback
+                // Track positions to calculate movement delta
+                this.prevLeftPos = new THREE.Vector3();
+                this.prevRightPos = new THREE.Vector3();
+                
                 this.statusText = document.querySelector('#status-text');
-            },
 
-            tick: function (time, timeDelta) {
-                if (!this.data.leftHand || !this.data.rightHand) return;
-
-                const leftObj = this.data.leftHand.object3D;
-                const rightObj = this.data.rightHand.object3D;
-
-                // Ensure hands are actively tracked (position > 0)
-                if (leftObj.position.lengthSq() === 0 || rightObj.position.lengthSq() === 0) return;
-
-                // Initialize starting positions on the first valid frame
-                if (!this.hasInitializedPositions) {
-                    this.prevLeft.copy(leftObj.position);
-                    this.prevRight.copy(rightObj.position);
-                    this.hasInitializedPositions = true;
-                    return;
+                // Bind events for Left Hand
+                if (this.data.leftHand) {
+                    this.data.leftHand.addEventListener('pinchstarted', () => {
+                        this.isLeftGrabbing = true;
+                        this.prevLeftPos.copy(this.data.leftHand.object3D.position);
+                    });
+                    this.data.leftHand.addEventListener('pinchended', () => {
+                        this.isLeftGrabbing = false;
+                    });
                 }
 
-                // Calculate how much each hand moved since the last frame
-                const deltaL = new THREE.Vector3().subVectors(leftObj.position, this.prevLeft);
-                const deltaR = new THREE.Vector3().subVectors(rightObj.position, this.prevRight);
-
-                // Update previous positions for the next frame
-                this.prevLeft.copy(leftObj.position);
-                this.prevRight.copy(rightObj.position);
-
-                const magL = deltaL.length();
-                const magR = deltaR.length();
-
-                // Check if BOTH hands are moving fast enough (exceeding the threshold)
-                // This allows you to slowly move your hands back to center without moving the camera
-                if (magL > this.data.threshold && magR > this.data.threshold) {
-                    
-                    // Normalize the vectors to compare directions
-                    const dirL = deltaL.clone().normalize();
-                    const dirR = deltaR.clone().normalize();
-                    
-                    // Dot product > 0.5 means hands are moving in roughly the same direction
-                    if (dirL.dot(dirR) > 0.5) {
-                        
-                        // Calculate average movement of both hands
-                        const avgDelta = new THREE.Vector3().addVectors(deltaL, deltaR).multiplyScalar(0.5);
-                        
-                        // Flatten the Y-axis so you don't fly into the air or sink into the ground
-                        avgDelta.y = 0;
-                        
-                        // Apply INVERSE movement to the rig (push left -> move right)
-                        this.el.object3D.position.addScaledVector(avgDelta, -this.data.multiplier);
-
-                        // --- UI Feedback Logic ---
-                        if (this.statusText) {
-                            // Determine primary direction of swish for UI text
-                            const absX = Math.abs(avgDelta.x);
-                            const absZ = Math.abs(avgDelta.z);
-                            
-                            if (absX > absZ) {
-                                if (avgDelta.x < 0) {
-                                    this.statusText.setAttribute('value', 'Swishing Left\n>> Moving Right >>');
-                                } else {
-                                    this.statusText.setAttribute('value', 'Swishing Right\n<< Moving Left <<');
-                                }
-                            } else {
-                                if (avgDelta.z < 0) {
-                                    this.statusText.setAttribute('value', 'Pushing Forward\nMoving Backward');
-                                } else {
-                                    this.statusText.setAttribute('value', 'Pulling Backward\nMoving Forward');
-                                }
-                            }
-                            this.statusText.setAttribute('color', '#00FF00');
-                        }
-                    } else {
-                        this.setIdleText();
-                    }
-                } else {
-                    this.setIdleText();
+                // Bind events for Right Hand
+                if (this.data.rightHand) {
+                    this.data.rightHand.addEventListener('pinchstarted', () => {
+                        this.isRightGrabbing = true;
+                        this.prevRightPos.copy(this.data.rightHand.object3D.position);
+                    });
+                    this.data.rightHand.addEventListener('pinchended', () => {
+                        this.isRightGrabbing = false;
+                    });
                 }
             },
 
-            setIdleText: function() {
+            tick: function () {
+                let moving = false;
+                const rigPos = this.el.object3D.position;
+
+                // Process Left Hand Movement
+                if (this.isLeftGrabbing && this.data.leftHand) {
+                    const currentPos = this.data.leftHand.object3D.position;
+                    const delta = new THREE.Vector3().subVectors(currentPos, this.prevLeftPos);
+                    
+                    // We only want horizontal movement (X and Z)
+                    delta.y = 0; 
+                    
+                    // Apply inverse movement to rig (pulling hand back moves player forward)
+                    rigPos.addScaledVector(delta, -this.data.multiplier);
+                    
+                    this.prevLeftPos.copy(currentPos);
+                    moving = true;
+                }
+
+                // Process Right Hand Movement
+                if (this.isRightGrabbing && this.data.rightHand) {
+                    const currentPos = this.data.rightHand.object3D.position;
+                    const delta = new THREE.Vector3().subVectors(currentPos, this.prevRightPos);
+                    
+                    delta.y = 0; 
+                    rigPos.addScaledVector(delta, -this.data.multiplier);
+                    
+                    this.prevRightPos.copy(currentPos);
+                    moving = true;
+                }
+
+                // Update HUD Feedback
                 if (this.statusText) {
-                    this.statusText.setAttribute('value', 'Status: Idle\nPush air with both hands to move');
-                    this.statusText.setAttribute('color', '#FFFFFF');
+                    if (moving) {
+                        this.statusText.setAttribute('value', 'Action: Grabbing & Pulling');
+                        this.statusText.setAttribute('color', '#00FF00');
+                    } else {
+                        this.statusText.setAttribute('value', 'Status: Idle\nPinch and pull the air to move');
+                        this.statusText.setAttribute('color', '#FFFFFF');
+                    }
                 }
             }
         });
 
         /**
-         * 2. ENVIRONMENT GENERATOR COMPONENT
-         * Generates a plain world with scattered reference objects (pillars).
-         * This makes it easy to perceive speed and direction when moving.
+         * 2. ENVIRONMENT GENERATOR
+         * Simple procedural world to provide visual flow/reference.
          */
         AFRAME.registerComponent('environment-generator', {
             init: function () {
+                // Ground
                 const floor = document.createElement('a-plane');
                 floor.setAttribute('rotation', '-90 0 0');
-                floor.setAttribute('width', '100');
-                floor.setAttribute('height', '100');
-                floor.setAttribute('color', '#222222');
+                floor.setAttribute('width', '200');
+                floor.setAttribute('height', '200');
+                floor.setAttribute('color', '#111');
                 this.el.appendChild(floor);
 
-                for (let i = 0; i < 60; i++) {
-                    const pillar = document.createElement('a-box');
-                    // Random coordinates from -40 to 40
-                    const x = (Math.random() - 0.5) * 80;
-                    const z = (Math.random() - 0.5) * 80;
+                // Grid helper
+                const grid = document.createElement('a-grid');
+                grid.setAttribute('width', '200');
+                grid.setAttribute('height', '200');
+                this.el.appendChild(grid);
 
-                    // Ensure the middle spawn area (0,0) is kept clear
-                    if (Math.abs(x) < 4 && Math.abs(z) < 4) continue;
+                // Markers/Pillars
+                for (let i = 0; i < 100; i++) {
+                    const pillar = document.createElement('a-cylinder');
+                    const x = (Math.random() - 0.5) * 150;
+                    const z = (Math.random() - 0.5) * 150;
+                    if (Math.abs(x) < 5 && Math.abs(z) < 5) continue;
 
-                    const height = Math.random() * 4 + 1;
-                    pillar.setAttribute('position', { x: x, y: height / 2, z: z });
-                    pillar.setAttribute('height', height);
-                    pillar.setAttribute('width', 0.5);
-                    pillar.setAttribute('depth', 0.5);
-                    pillar.setAttribute('color', '#' + Math.floor(Math.random() * 16777215).toString(16));
-                    
+                    pillar.setAttribute('position', { x: x, y: 2, z: z });
+                    pillar.setAttribute('radius', '0.2');
+                    pillar.setAttribute('height', '4');
+                    pillar.setAttribute('color', 'hsl(' + (Math.random() * 360) + ', 70%, 60%)');
                     this.el.appendChild(pillar);
                 }
             }
@@ -153,33 +135,28 @@
     </script>
 </head>
 <body>
-    <!-- Require webxr features for native hand-tracking capabilities -->
     <a-scene webxr="optionalFeatures: hand-tracking">
         
-        <!-- Generated Environment with random pillars to see movement -->
+        <!-- Procedural World -->
         <a-entity environment-generator></a-entity>
 
-        <!-- Player Rig - Attach the Swish Locomotion Component to the Rig -->
-        <a-entity id="rig" swish-locomotion position="0 0 0">
-            
-            <!-- Player Camera -->
-            <a-camera id="camera" position="0 1.6 0">
-                <!-- Floating HUD attached to camera for status updates -->
+        <!-- Player Rig -->
+        <a-entity id="rig" grab-locomotion position="0 0 0">
+            <a-camera id="camera" position="0 1.6 0" wasd-controls-enabled="false">
+                <!-- Status Display -->
                 <a-text 
                     id="status-text" 
-                    value="Status: Idle\nPush air with both hands to move" 
-                    position="0 -0.5 -1.5" 
+                    value="Initializing..." 
+                    position="0 -0.4 -1" 
                     align="center" 
-                    width="2" 
-                    color="#FFFFFF"
+                    width="1.5"
                     font="mozillavr"
                 ></a-text>
             </a-camera>
 
-            <!-- WebXR Hand Tracking Controls -->
+            <!-- Hand Entities -->
             <a-entity id="leftHand" hand-tracking-controls="hand: left;"></a-entity>
             <a-entity id="rightHand" hand-tracking-controls="hand: right;"></a-entity>
-            
         </a-entity>
 
     </a-scene>
